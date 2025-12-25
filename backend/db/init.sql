@@ -13,10 +13,17 @@ CREATE TABLE IF NOT EXISTS product (
     last_updated_by VARCHAR(50) DEFAULT 'system'
 );
 
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+    user_email VARCHAR(255) NOT NULL PRIMARY KEY,
+    access_token TEXT NOT NULL,
+    refresh_token TEXT,
+    token_type VARCHAR(50),
+    expiry DATETIME,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
 
 CREATE USER IF NOT EXISTS 'replicator'@'%' IDENTIFIED WITH mysql_native_password BY 'password';
-
-
-GRANT REPLICATION SLAVE, REPLICATION CLIENT, SELECT ON *.* TO 'replicator'@'%';
-
+GRANT ALL PRIVILEGES ON interndb.* TO 'replicator'@'%';
 FLUSH PRIVILEGES;
