@@ -1,7 +1,9 @@
 package cdc
 
 import (
+	"fmt"
 	"log"
+	"os"
 
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-mysql-org/go-mysql/mysql"
@@ -21,7 +23,15 @@ type MyEventHandler struct {
 
 func StartListener(outChan chan<- SyncEvent, startFile string, startPos uint32) {
 	cfg := canal.NewDefaultConfig()
-	cfg.Addr = "127.0.0.1:3306"
+
+	dbHost := os.Getenv("DB_HOST")
+	if dbHost == "" {
+		dbHost = "127.0.0.1"
+	}
+
+	// Use the dynamic host instead of hardcoded 127.0.0.1
+	cfg.Addr = fmt.Sprintf("%s:3306", dbHost)
+
 	cfg.User = "replicator"
 	cfg.Password = "password"
 	cfg.Dump.ExecutionPath = ""

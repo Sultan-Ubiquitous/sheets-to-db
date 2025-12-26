@@ -1,6 +1,27 @@
 version: '3.8'
 
 services:
+  backend:
+    build: .
+    container_name: go-backend
+    restart: on-failure
+    ports:
+      - "8080:8080"
+    environment:
+      - DB_HOST=mysql
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - SPREADSHEET_ID=${SPREADSHEET_ID}
+      - MYSQL_USER=user
+      - MYSQL_PASSWORD=cdcpassword
+      - MYSQL_DATABASE=interndb
+    volumes:
+      - ./secrets.json:/root/secrets.json
+    depends_on:
+      - mysql
+    networks:
+      - app-network
+
   mysql:
     image: mysql:8.0
     container_name: mysql-cdc
@@ -17,7 +38,13 @@ services:
       - mysql-data:/var/lib/mysql
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
     command: --default-authentication-plugin=mysql_native_password
+    networks:
+      - app-network
 
 volumes:
   mysql-data:
     driver: local
+
+networks:
+  app-network:
+    driver: bridge

@@ -21,9 +21,14 @@ func main() {
 
 	config.LoadConfig()
 
-	dsn := "replicator:password@tcp(127.0.0.1:3306)/interndb?parseTime=true"
+	dbHost := os.Getenv("DB_HOST")
+	if dbHost == "" {
+		dbHost = "127.0.0.1"
+	}
 
-	log.Println("Connecting to Database")
+	dsn := "replicator:password@tcp(" + dbHost + ":3306)/interndb?parseTime=true"
+
+	log.Println("Connecting to Database at " + dbHost)
 
 	if err := database.InitDB(dsn); err != nil {
 		log.Fatalf("Fatal error: Could not connect to database: %v", err)
