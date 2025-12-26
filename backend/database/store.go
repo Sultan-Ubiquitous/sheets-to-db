@@ -62,7 +62,6 @@ func SaveSheetID(name, spreadsheetID string) error {
 }
 
 func GetAllProducts() ([]map[string]interface{}, error) {
-	// added last_updated_by to query
 	rows, err := DB.Query("SELECT uuid, product_name, quantity, price, discount, last_updated_by FROM product")
 	if err != nil {
 		return nil, err
@@ -74,9 +73,8 @@ func GetAllProducts() ([]map[string]interface{}, error) {
 		var uuid, name, lastUpdatedBy string
 		var qty int
 		var price float64
-		var discount bool // Changed to bool based on your schema (TINYINT(1))
+		var discount bool
 
-		// Scan lastUpdatedBy as well
 		if err := rows.Scan(&uuid, &name, &qty, &price, &discount, &lastUpdatedBy); err != nil {
 			return nil, err
 		}
@@ -87,13 +85,12 @@ func GetAllProducts() ([]map[string]interface{}, error) {
 			"quantity":        qty,
 			"price":           price,
 			"discount":        discount,
-			"last_updated_by": lastUpdatedBy, // Added field
+			"last_updated_by": lastUpdatedBy,
 		})
 	}
 	return products, nil
 }
 
-// NEW FUNCTION: Fetch single product with all fields
 func GetProductByUUID(uuid string) (map[string]interface{}, error) {
 	query := `
         SELECT uuid, product_name, quantity, price, discount, last_updated_by 
@@ -123,19 +120,15 @@ func GetProductByUUID(uuid string) (map[string]interface{}, error) {
 	}, nil
 }
 
-// 2. Get the CURRENT Binlog position so we know where to start listening
 func GetMasterStatus() (string, uint32, error) {
 	var file string
 	var position uint32
-	var binlogDoDB, binlogIgnoreDB, executedGtidSet interface{} // Ignore these columns
+	var binlogDoDB, binlogIgnoreDB, executedGtidSet interface{}
 
-	// MySQL command to get current position
 	row := DB.QueryRow("SHOW MASTER STATUS")
 
-	// Scan structure depends on MySQL version, but usually File, Position are first 2
 	err := row.Scan(&file, &position, &binlogDoDB, &binlogIgnoreDB, &executedGtidSet)
 	if err != nil {
-		// Handle cases where fewer columns are returned (older MySQL)
 		err = row.Scan(&file, &position, &binlogDoDB, &binlogIgnoreDB)
 		if err != nil {
 			return "", 0, fmt.Errorf("failed to get master status: %v", err)
@@ -178,8 +171,7 @@ func GetLatestToken() (*oauth2.Token, error) {
 }
 
 func UpdateProductField(uuid string, dbField string, value interface{}, userEmail string) error {
-	// 1. Safety Guard: Whitelist allowed columns to prevent SQL injection
-	// (even though the handler maps them, this is a second line of defense)
+
 	allowedFields := map[string]bool{
 		"product_name": true,
 		"quantity":     true,
@@ -191,11 +183,8 @@ func UpdateProductField(uuid string, dbField string, value interface{}, userEmai
 		return fmt.Errorf("invalid database field: %s", dbField)
 	}
 
-	// 2. Construct Query
-	// Note: We inject dbField directly because we validated it against the whitelist above.
 	query := fmt.Sprintf("UPDATE product SET %s = ?, last_updated_by = ?, updated_at = ? WHERE uuid = ?", dbField)
 
-	// 3. Execute
 	_, err := DB.Exec(query, value, userEmail, time.Now(), uuid)
 	return err
 }
@@ -214,15 +203,8 @@ func TxUpsertProductField(tx *sql.Tx, uuid string, dbField string, value interfa
 
 	var query string
 
-	// LOGIC:
-	// We construct a specific query for each scenario.
-	// If we are inserting a "Price", we MUST provide a dummy "Product Name" to satisfy the NOT NULL constraint.
-	// If we are inserting a "Name", we MUST provide a dummy "Price".
-	// If we are inserting "Quantity", we MUST provide BOTH.
-
 	switch dbField {
 	case "product_name":
-		// User provided Name, we inject dummy Price (0.00) for the INSERT case
 		query = `
 			INSERT INTO product (uuid, product_name, price, last_updated_by, updated_at) 
 			VALUES (?, ?, 0.00, ?, ?) 
@@ -233,7 +215,6 @@ func TxUpsertProductField(tx *sql.Tx, uuid string, dbField string, value interfa
 		`
 
 	case "price":
-		// User provided Price, we inject dummy Name ('New Product') for the INSERT case
 		query = `
 			INSERT INTO product (uuid, price, product_name, last_updated_by, updated_at) 
 			VALUES (?, ?, 'New Product', ?, ?) 
@@ -244,8 +225,6 @@ func TxUpsertProductField(tx *sql.Tx, uuid string, dbField string, value interfa
 		`
 
 	default:
-		// User provided Quantity or Discount. We inject BOTH dummy Name and Price.
-		// Note: We safely inject dbField here because it's whitelisted above.
 		query = fmt.Sprintf(`
 			INSERT INTO product (uuid, %s, product_name, price, last_updated_by, updated_at) 
 			VALUES (?, ?, 'New Product', 0.00, ?, ?) 
@@ -255,9 +234,6 @@ func TxUpsertProductField(tx *sql.Tx, uuid string, dbField string, value interfa
 				updated_at = VALUES(updated_at)
 		`, dbField, dbField, dbField)
 	}
-
-	// Execute with the standard arguments (UUID, Value, Email, Time)
-	// The dummy values ('New Product', 0.00) are hardcoded in the SQL string above.
 	_, err := tx.Exec(query, uuid, value, userEmail, time.Now())
 
 	return err

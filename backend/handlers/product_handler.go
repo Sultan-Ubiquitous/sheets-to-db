@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Sultan-Ubiquitous/sheets-to-db/internal/database"
+	"github.com/Sultan-Ubiquitous/sheets-to-db/database"
 	"github.com/google/uuid"
 )
 

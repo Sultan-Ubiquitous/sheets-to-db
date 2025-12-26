@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/Sultan-Ubiquitous/sheets-to-db/internal/config"
-	"github.com/Sultan-Ubiquitous/sheets-to-db/internal/database"
+	"github.com/Sultan-Ubiquitous/sheets-to-db/config"
+	"github.com/Sultan-Ubiquitous/sheets-to-db/database"
 	"golang.org/x/oauth2"
 )
 

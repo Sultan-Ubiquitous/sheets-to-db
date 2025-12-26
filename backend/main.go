@@ -6,10 +6,10 @@ import (
 	"os"
 
 	"github.com/Sultan-Ubiquitous/sheets-to-db/cdc"
+	"github.com/Sultan-Ubiquitous/sheets-to-db/config"
+	"github.com/Sultan-Ubiquitous/sheets-to-db/database"
 	"github.com/Sultan-Ubiquitous/sheets-to-db/gsheets"
-	"github.com/Sultan-Ubiquitous/sheets-to-db/internal/config"
-	"github.com/Sultan-Ubiquitous/sheets-to-db/internal/database"
-	"github.com/Sultan-Ubiquitous/sheets-to-db/internal/handlers"
+	"github.com/Sultan-Ubiquitous/sheets-to-db/handlers"
 	"github.com/joho/godotenv"
 )
 
@@ -31,9 +31,6 @@ func main() {
 
 	log.Println("Successfully connected to MySQL database!")
 
-	// --- CHANGE 1: Capture Current State ---
-	// Get the current binlog position BEFORE we start doing anything else.
-	// This marks the "Now" point.
 	binlogFile, binlogPos, err := database.GetMasterStatus()
 	if err != nil {
 		log.Fatalf("Error getting master status: %v", err)
@@ -43,8 +40,6 @@ func main() {
 	authReadySignal := make(chan struct{}, 1)
 	syncChannel := make(chan cdc.SyncEvent, 100)
 
-	// --- CHANGE 2: Start Listener from Captured Position ---
-	// We pass the file/pos so it ignores old history and only listens to NEW events.
 	go cdc.StartListener(syncChannel, binlogFile, binlogPos)
 
 	spreadsheetID := os.Getenv("SPREADSHEET_ID")
@@ -57,20 +52,15 @@ func main() {
 	go func() {
 		log.Println("Starting Sheet Sync Worker...")
 
-		// Initialize Manager
 		sm, err := gsheets.NewSheetManager(spreadsheetID)
 
-		// Initial Block: If completely missing token, wait here first.
 		if err != nil {
 			log.Println("Worker STALLED. Waiting for login...")
 			<-authReadySignal
 			log.Println("Resuming...")
-			sm, _ = gsheets.NewSheetManager(spreadsheetID) // Retry
+			sm, _ = gsheets.NewSheetManager(spreadsheetID)
 		}
 
-		// --- CHANGE 3: Perform Initial Sync (Snapshot) ---
-		// Now that we have a manager, wipe the sheet and dump the current DB state
-		// so it matches the "Snapshot" we took at the start.
 		if sm != nil {
 			log.Println("Performing Initial Full Sync...")
 			products, err := database.GetAllProducts()
@@ -87,7 +77,6 @@ func main() {
 
 		for {
 			select {
-			// Case 1: We receive a new Login Signal (User re-authenticated)
 			case <-authReadySignal:
 				log.Println("Hot Reload: Refreshing Sheet Manager with new token...")
 				newSm, err := gsheets.NewSheetManager(spreadsheetID)
@@ -95,15 +84,12 @@ func main() {
 					sm = newSm
 					log.Println("Sheet Manager refreshed successfully!")
 
-					// Optional: Trigger another full sync here if you want to ensure
-					// the sheet is fresh after a re-login.
 					products, _ := database.GetAllProducts()
 					sm.ClearAndOverwrite(products)
 				} else {
 					log.Printf("Failed to refresh manager: %v", err)
 				}
 
-			// Case 2: We receive a Database Event
 			case event := <-syncChannel:
 				if sm == nil {
 					log.Println("Skipping event: Sheet Manager not ready")
@@ -114,11 +100,9 @@ func main() {
 
 				var err error
 
-				// CHECK ACTION TYPE
 				if event.Action == "delete" {
 					err = sm.DeleteRow(event.RowID)
 				} else {
-					// "insert" or "update"
 					err = sm.SyncToSheet(event.RowID, event.Data)
 				}
 
@@ -136,7 +120,6 @@ func main() {
 	http.HandleFunc("/auth/google/callback", func(w http.ResponseWriter, r *http.Request) {
 		handlers.GoogleCallbackHandler(w, r, authReadySignal)
 	})
-	http.HandleFunc("/api/create-sheet", gsheets.CreateAndSeedSheetHandler)
 
 	http.HandleFunc("/api/products", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -158,7 +141,6 @@ func main() {
 		}
 	})
 
-	// Add this line with your other routes
 	http.HandleFunc("/api/webhook/sheets", handlers.SheetWebhookHandler)
 
 	port := ":8080"

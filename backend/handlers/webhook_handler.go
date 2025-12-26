@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/Sultan-Ubiquitous/sheets-to-db/internal/database"
+	"github.com/Sultan-Ubiquitous/sheets-to-db/database"
 )
 
 // --- MISSING STRUCT ADDED BACK HERE ---

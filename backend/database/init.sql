@@ -5,9 +5,9 @@ USE interndb;
 
 CREATE TABLE IF NOT EXISTS product (
     uuid VARCHAR(36) NOT NULL PRIMARY KEY,
-    product_name VARCHAR(255) DEFAULT 'Untitled',  -- Changed from NOT NULL
+    product_name VARCHAR(255) DEFAULT 'Untitled',  
     quantity INT DEFAULT 0,
-    price DECIMAL(10,2) DEFAULT 0.00,              -- Changed from NOT NULL
+    price DECIMAL(10,2) DEFAULT 0.00,              
     discount BOOLEAN DEFAULT FALSE,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     last_updated_by VARCHAR(50) DEFAULT 'system'
@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
 
 CREATE TABLE IF NOT EXISTS sheet_mappings (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(255) NOT NULL UNIQUE, -- e.g., 'product_inventory'
+    name VARCHAR(255) NOT NULL UNIQUE, 
     spreadsheet_id VARCHAR(255) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

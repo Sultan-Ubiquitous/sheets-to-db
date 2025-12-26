@@ -6,8 +6,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/Sultan-Ubiquitous/sheets-to-db/internal/config"
-	"github.com/Sultan-Ubiquitous/sheets-to-db/internal/database"
+	"github.com/Sultan-Ubiquitous/sheets-to-db/config"
+	"github.com/Sultan-Ubiquitous/sheets-to-db/database"
 	"google.golang.org/api/option"
 	"google.golang.org/api/sheets/v4"
 )
@@ -17,13 +17,11 @@ type SheetManager struct {
 	SpreadsheetID string
 }
 
-// Helper to get a pointer to a string
 func strPtr(s string) *string {
 	return &s
 }
 
 func (s *SheetManager) InitializeSheet() error {
-	// 1. Check if the sheet is already initialized
 	readRange := "Sheet1!A1"
 	resp, err := s.Service.Spreadsheets.Values.Get(s.SpreadsheetID, readRange).Do()
 	if err != nil {
@@ -38,14 +36,12 @@ func (s *SheetManager) InitializeSheet() error {
 
 	var requests []*sheets.Request
 
-	// --- A. Set Header Values ---
 	requests = append(requests, &sheets.Request{
 		UpdateCells: &sheets.UpdateCellsRequest{
 			Start: &sheets.GridCoordinate{SheetId: 0, RowIndex: 0, ColumnIndex: 0},
 			Rows: []*sheets.RowData{
 				{
 					Values: []*sheets.CellData{
-						// USE strPtr() HERE
 						{UserEnteredValue: &sheets.ExtendedValue{StringValue: strPtr("UUID")}},
 						{UserEnteredValue: &sheets.ExtendedValue{StringValue: strPtr("Product Name")}},
 						{UserEnteredValue: &sheets.ExtendedValue{StringValue: strPtr("Quantity")}},
@@ -60,7 +56,6 @@ func (s *SheetManager) InitializeSheet() error {
 		},
 	})
 
-	// --- B. Format Header Row ---
 	requests = append(requests, &sheets.Request{
 		RepeatCell: &sheets.RepeatCellRequest{
 			Range: &sheets.GridRange{
@@ -78,7 +73,6 @@ func (s *SheetManager) InitializeSheet() error {
 		},
 	})
 
-	// Freeze top row
 	requests = append(requests, &sheets.Request{
 		UpdateSheetProperties: &sheets.UpdateSheetPropertiesRequest{
 			Properties: &sheets.SheetProperties{
@@ -89,7 +83,6 @@ func (s *SheetManager) InitializeSheet() error {
 		},
 	})
 
-	// --- C. Format Price Column ---
 	requests = append(requests, &sheets.Request{
 		RepeatCell: &sheets.RepeatCellRequest{
 			Range: &sheets.GridRange{
@@ -106,7 +99,6 @@ func (s *SheetManager) InitializeSheet() error {
 		},
 	})
 
-	// --- D. Format Quantity Column ---
 	requests = append(requests, &sheets.Request{
 		RepeatCell: &sheets.RepeatCellRequest{
 			Range: &sheets.GridRange{
@@ -129,22 +121,15 @@ func (s *SheetManager) InitializeSheet() error {
 func NewSheetManager(spreadsheetID string) (*SheetManager, error) {
 	ctx := context.Background()
 
-	// 1. Get the token from our DB
 	token, err := database.GetLatestToken()
 	if err != nil {
 		return nil, fmt.Errorf("no auth token found in DB, please login first: %v", err)
 	}
 
-	// 2. Create the OAuth Config (needed for auto-refresh)
-	// We reconstruct the config using the env variables
-	conf := config.GoogleOAuthConfig // Ensure your config package exposes the oauth2.Config
+	conf := config.GoogleOAuthConfig
 
-	// 3. Create a TokenSource
-	// This is the magic. It wraps the token. If it expires,
-	// the library uses the RefreshToken to get a new one automatically.
 	tokenSource := conf.TokenSource(ctx, token)
 
-	// 4. Initialize the Sheets Service
 	srv, err := sheets.NewService(ctx, option.WithTokenSource(tokenSource))
 	if err != nil {
 		return nil, err
@@ -155,17 +140,13 @@ func NewSheetManager(spreadsheetID string) (*SheetManager, error) {
 		SpreadsheetID: spreadsheetID,
 	}
 
-	// --- ADD THIS BLOCK ---
-	// This creates the headers if they are missing
 	if err := sm.InitializeSheet(); err != nil {
 		log.Printf("Warning: Failed to initialize sheet headers: %v", err)
 	}
-	// ---------------------
 
 	return sm, nil
 }
 
-// --- NEW HELPER: Find row index by UUID ---
 func (s *SheetManager) findRowIndex(uuid string) (int, error) {
 	readRange := "Sheet1!A:A"
 	resp, err := s.Service.Spreadsheets.Values.Get(s.SpreadsheetID, readRange).Do()
@@ -175,30 +156,27 @@ func (s *SheetManager) findRowIndex(uuid string) (int, error) {
 
 	for i, row := range resp.Values {
 		if len(row) > 0 && row[0] == uuid {
-			return i, nil // Returns 0-based index
+			return i, nil
 		}
 	}
 	return -1, nil
 }
 
 func (s *SheetManager) SyncToSheet(uuid string, data map[string]interface{}) error {
-	// 1. Find the Row Number
+
 	index, err := s.findRowIndex(uuid)
 	if err != nil {
 		return err
 	}
 
-	// If row doesn't exist, INSERT (Append)
 	if index == -1 {
 		return s.appendRow(uuid, data)
 	}
 
-	// 2. Prepare Data
 	rowNum := index + 1
 	writeRange := fmt.Sprintf("Sheet1!B%d:G%d", rowNum, rowNum)
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 
-	// Safely get last_updated_by, default to system if missing
 	updatedBy, ok := data["last_updated_by"].(string)
 	if !ok || updatedBy == "" {
 		updatedBy = "system"
@@ -219,16 +197,12 @@ func (s *SheetManager) SyncToSheet(uuid string, data map[string]interface{}) err
 
 	_, err = s.Service.Spreadsheets.Values.Update(s.SpreadsheetID, writeRange, valRange).ValueInputOption("RAW").Do()
 
-	// REMOVED: The secondary "loopGuard" update.
-	// We now write the actual user to Column G in the block above.
-
 	if err == nil {
 		log.Printf("Synced row %d in Sheets for UUID %s (Updated By: %s)", rowNum, uuid, updatedBy)
 	}
 	return err
 }
 
-// --- NEW METHOD: DeleteRow ---
 func (s *SheetManager) DeleteRow(uuid string) error {
 	index, err := s.findRowIndex(uuid)
 	if err != nil {
@@ -240,7 +214,6 @@ func (s *SheetManager) DeleteRow(uuid string) error {
 		return nil
 	}
 
-	// Prepare delete request (DeleteDimension)
 	req := &sheets.Request{
 		DeleteDimension: &sheets.DeleteDimensionRequest{
 			Range: &sheets.DimensionRange{
@@ -266,7 +239,6 @@ func (s *SheetManager) DeleteRow(uuid string) error {
 func (s *SheetManager) appendRow(uuid string, data map[string]interface{}) error {
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 
-	// Safely get last_updated_by
 	updatedBy, ok := data["last_updated_by"].(string)
 	if !ok || updatedBy == "" {
 		updatedBy = "system"
@@ -279,7 +251,7 @@ func (s *SheetManager) appendRow(uuid string, data map[string]interface{}) error
 		data["price"],
 		data["discount"],
 		timestamp,
-		updatedBy, // CHANGE: Use actual DB value
+		updatedBy,
 	}
 
 	valRange := &sheets.ValueRange{
@@ -291,26 +263,22 @@ func (s *SheetManager) appendRow(uuid string, data map[string]interface{}) error
 }
 
 func (s *SheetManager) ClearAndOverwrite(products []map[string]interface{}) error {
-	// 1. Clear existing data (keeping headers)
-	// Assuming headers are in Row 1, we clear everything from Row 2 downwards
+
 	clearRange := "Sheet1!A2:Z"
 	_, err := s.Service.Spreadsheets.Values.Clear(s.SpreadsheetID, clearRange, &sheets.ClearValuesRequest{}).Do()
 	if err != nil {
 		return fmt.Errorf("failed to clear sheet: %v", err)
 	}
 
-	// 2. Prepare Data for Bulk Write
 	var valueRange sheets.ValueRange
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 
 	for _, p := range products {
-		// --- CHANGE START ---
-		// Determine the "Updated By" value
-		updatedBy := "initial_sync" // Default fallback
+
+		updatedBy := "initial_sync"
 		if val, ok := p["last_updated_by"].(string); ok && val != "" {
 			updatedBy = val
 		}
-		// --- CHANGE END ---
 
 		row := []interface{}{
 			p["uuid"],
@@ -319,16 +287,15 @@ func (s *SheetManager) ClearAndOverwrite(products []map[string]interface{}) erro
 			p["price"],
 			p["discount"],
 			timestamp,
-			updatedBy, // Use the determined value here
+			updatedBy,
 		}
 		valueRange.Values = append(valueRange.Values, row)
 	}
 
 	if len(valueRange.Values) == 0 {
-		return nil // Nothing to write
+		return nil
 	}
 
-	// 3. Write new data starting at A2
 	writeRange := "Sheet1!A2"
 	_, err = s.Service.Spreadsheets.Values.Update(s.SpreadsheetID, writeRange, &valueRange).ValueInputOption("RAW").Do()
 
