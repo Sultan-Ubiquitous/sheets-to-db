@@ -23,7 +23,18 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS sheet_mappings (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255) NOT NULL UNIQUE, -- e.g., 'product_inventory'
+    spreadsheet_id VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE USER IF NOT EXISTS 'replicator'@'%' IDENTIFIED WITH mysql_native_password BY 'password';
-GRANT ALL PRIVILEGES ON interndb.* TO 'replicator'@'%';
+GRANT REPLICATION SLAVE, REPLICATION CLIENT, SELECT ON *.* TO 'replicator'@'%';
 FLUSH PRIVILEGES;
+
+INSERT IGNORE INTO product (uuid, product_name, quantity, price, discount) VALUES
+('u-101', 'Gaming Mouse', 50, 49.99, FALSE),
+('u-102', 'Mechanical Keyboard', 30, 120.00, TRUE),
+('u-103', 'USB-C Cable', 100, 9.99, FALSE);

@@ -28,7 +28,7 @@ type GoogleUser struct {
 	Picture       string `json:"picture"`
 }
 
-func GoogleCallbackHandler(w http.ResponseWriter, r *http.Request) {
+func GoogleCallbackHandler(w http.ResponseWriter, r *http.Request, loginSignal chan<- struct{}) {
 	code := r.URL.Query().Get("code")
 
 	token, err := config.GoogleOAuthConfig.Exchange(
@@ -60,6 +60,13 @@ func GoogleCallbackHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("DB Error: %v\n", err)
 		http.Error(w, "Failed to save token", http.StatusInternalServerError)
 		return
+	}
+
+	select {
+	case loginSignal <- struct{}{}:
+		fmt.Println("Signaled worker that login is complete.")
+	default:
+		// Channel already has a signal or no one is waiting; harmless.
 	}
 
 	fmt.Fprintf(w, "Login Successful! Token stored for %s", userInfo.Email)
