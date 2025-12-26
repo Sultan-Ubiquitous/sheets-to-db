@@ -189,7 +189,8 @@ func (s *SheetManager) SyncToSheet(uuid string, data map[string]interface{}) err
 
 	// 2. Update the existing row
 	// Mapping: A=UUID, B=Name, C=Qty, D=Price, E=Discount, F=Updated, G=LastBy
-	writeRange := fmt.Sprintf("Sheet1!B%d:E%d", rowIndex, rowIndex)
+	// Change E to G to allow writing to the "Last Updated" and "Updated By" columns
+	writeRange := fmt.Sprintf("Sheet1!B%d:G%d", rowIndex, rowIndex)
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 
 	values := []interface{}{
@@ -240,5 +241,43 @@ func (s *SheetManager) appendRow(uuid string, data map[string]interface{}) error
 	}
 
 	_, err := s.Service.Spreadsheets.Values.Append(s.SpreadsheetID, "Sheet1!A1", valRange).ValueInputOption("RAW").Do()
+	return err
+}
+
+func (s *SheetManager) ClearAndOverwrite(products []map[string]interface{}) error {
+	// 1. Clear existing data (keeping headers)
+	// Assuming headers are in Row 1, we clear everything from Row 2 downwards
+	clearRange := "Sheet1!A2:Z"
+	_, err := s.Service.Spreadsheets.Values.Clear(s.SpreadsheetID, clearRange, &sheets.ClearValuesRequest{}).Do()
+	if err != nil {
+		return fmt.Errorf("failed to clear sheet: %v", err)
+	}
+
+	// 2. Prepare Data for Bulk Write
+	var valueRange sheets.ValueRange
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+
+	for _, p := range products {
+		row := []interface{}{
+			p["uuid"],
+			p["product_name"],
+			p["quantity"],
+			p["price"],
+			p["discount"],
+			timestamp,
+			"initial_sync", // Mark as initial load
+		}
+		valueRange.Values = append(valueRange.Values, row)
+	}
+
+	if len(valueRange.Values) == 0 {
+		return nil // Nothing to write
+	}
+
+	// 3. Write new data starting at A2
+	writeRange := "Sheet1!A2"
+	_, err = s.Service.Spreadsheets.Values.Update(s.SpreadsheetID, writeRange, &valueRange).ValueInputOption("RAW").Do()
+
+	log.Printf("Successfully performed Initial Sync of %d products", len(products))
 	return err
 }
