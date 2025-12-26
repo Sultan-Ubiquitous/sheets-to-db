@@ -5,9 +5,9 @@ USE interndb;
 
 CREATE TABLE IF NOT EXISTS product (
     uuid VARCHAR(36) NOT NULL PRIMARY KEY,
-    product_name VARCHAR(255) NOT NULL,
+    product_name VARCHAR(255) DEFAULT 'Untitled',  -- Changed from NOT NULL
     quantity INT DEFAULT 0,
-    price DECIMAL(10,2) NOT NULL,
+    price DECIMAL(10,2) DEFAULT 0.00,              -- Changed from NOT NULL
     discount BOOLEAN DEFAULT FALSE,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     last_updated_by VARCHAR(50) DEFAULT 'system'

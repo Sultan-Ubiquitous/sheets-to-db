@@ -50,46 +50,63 @@ func StartListener(outChan chan<- SyncEvent, startFile string, startPos uint32) 
 }
 
 func (h *MyEventHandler) OnRow(e *canal.RowsEvent) error {
-	if e.Action == canal.UpdateAction || e.Action == canal.InsertAction {
+	if e.Action == canal.UpdateAction || e.Action == canal.InsertAction || e.Action == canal.DeleteAction {
 		// Get the latest row state
 		row := e.Rows[len(e.Rows)-1]
 
-		// FIX 2: Safe Type Assertion for last_updated_by (Col Index 6 in your SQL schema)
-		// Note: Based on your SQL, last_updated_by is the LAST column.
-		// 0:uuid, 1:name, 2:quantity, 3:price, 4:discount, 5:updated_at, 6:last_updated_by
+		// SQL Schema Mapping:
+		// 0: uuid
+		// 1: product_name
+		// 2: quantity
+		// 3: price
+		// 4: discount
+		// 5: updated_at
+		// 6: last_updated_by
 
-		lastUpdatedBy := ""
-		if val, ok := row[6].(string); ok {
-			lastUpdatedBy = val
-		} else if valBytes, ok := row[6].([]byte); ok {
-			lastUpdatedBy = string(valBytes)
+		// 1. Extract 'last_updated_by' safely
+		lastUpdatedBy := "system" // Default
+		if len(row) > 6 {
+			if val, ok := row[6].(string); ok {
+				lastUpdatedBy = val
+			} else if valBytes, ok := row[6].([]byte); ok {
+				lastUpdatedBy = string(valBytes)
+			}
 		}
 
-		// Loop Prevention
+		// 2. Loop Prevention
+		// If the DB update was caused by the bot itself, don't sync back to sheets
 		if lastUpdatedBy == "sync_bot" {
 			return nil
 		}
 
-		// FIX 3: Safe UUID Extraction
+		// 3. Extract UUID
 		uuid := ""
-		if val, ok := row[0].(string); ok {
-			uuid = val
-		} else if valBytes, ok := row[0].([]byte); ok {
-			uuid = string(valBytes)
+		if len(row) > 0 {
+			if val, ok := row[0].(string); ok {
+				uuid = val
+			} else if valBytes, ok := row[0].([]byte); ok {
+				uuid = string(valBytes)
+			}
 		}
 
-		data := map[string]interface{}{
-			"uuid":         uuid,
-			"product_name": row[1],
-			"quantity":     row[2],
-			"price":        row[3],
+		// 4. Construct Data Map (THE FIX IS HERE)
+		// We must explicitly add every field we want to appear in the Sheet.
+		data := map[string]interface{}{}
+
+		if len(row) > 4 {
+			data["uuid"] = uuid
+			data["product_name"] = row[1]
+			data["quantity"] = row[2]
+			data["price"] = row[3]
+			data["discount"] = row[4]               // Added Missing Field
+			data["last_updated_by"] = lastUpdatedBy // Added Missing Field
 		}
 
 		h.OutChan <- SyncEvent{
-			Source: "MYSQL",  // Matches Struct
-			RowID:  uuid,     // Matches Struct
-			Action: e.Action, // Matches Struct
-			Data:   data,     // Matches Struct
+			Source: "MYSQL",
+			RowID:  uuid,
+			Action: e.Action,
+			Data:   data,
 		}
 	}
 	return nil

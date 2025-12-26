@@ -165,33 +165,44 @@ func NewSheetManager(spreadsheetID string) (*SheetManager, error) {
 	return sm, nil
 }
 
-func (s *SheetManager) SyncToSheet(uuid string, data map[string]interface{}) error {
-	// 1. Find the Row Number (Scan Column A)
-	// In production, you would cache this map (UUID -> Row#) in Redis to avoid reading the whole sheet every time.
+// --- NEW HELPER: Find row index by UUID ---
+func (s *SheetManager) findRowIndex(uuid string) (int, error) {
 	readRange := "Sheet1!A:A"
 	resp, err := s.Service.Spreadsheets.Values.Get(s.SpreadsheetID, readRange).Do()
 	if err != nil {
-		return fmt.Errorf("failed to read sheet for lookup: %v", err)
+		return -1, fmt.Errorf("failed to read sheet for lookup: %v", err)
 	}
 
-	rowIndex := -1
 	for i, row := range resp.Values {
 		if len(row) > 0 && row[0] == uuid {
-			rowIndex = i + 1 // Sheets are 1-indexed
-			break
+			return i, nil // Returns 0-based index
 		}
 	}
+	return -1, nil
+}
 
-	// If row doesn't exist, we should INSERT (Append)
-	if rowIndex == -1 {
+func (s *SheetManager) SyncToSheet(uuid string, data map[string]interface{}) error {
+	// 1. Find the Row Number
+	index, err := s.findRowIndex(uuid)
+	if err != nil {
+		return err
+	}
+
+	// If row doesn't exist, INSERT (Append)
+	if index == -1 {
 		return s.appendRow(uuid, data)
 	}
 
-	// 2. Update the existing row
-	// Mapping: A=UUID, B=Name, C=Qty, D=Price, E=Discount, F=Updated, G=LastBy
-	// Change E to G to allow writing to the "Last Updated" and "Updated By" columns
-	writeRange := fmt.Sprintf("Sheet1!B%d:G%d", rowIndex, rowIndex)
+	// 2. Prepare Data
+	rowNum := index + 1
+	writeRange := fmt.Sprintf("Sheet1!B%d:G%d", rowNum, rowNum)
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
+
+	// Safely get last_updated_by, default to system if missing
+	updatedBy, ok := data["last_updated_by"].(string)
+	if !ok || updatedBy == "" {
+		updatedBy = "system"
+	}
 
 	values := []interface{}{
 		data["product_name"],
@@ -199,7 +210,7 @@ func (s *SheetManager) SyncToSheet(uuid string, data map[string]interface{}) err
 		data["price"],
 		data["discount"],
 		timestamp,
-		"sync_bot",
+		updatedBy,
 	}
 
 	valRange := &sheets.ValueRange{
@@ -207,33 +218,68 @@ func (s *SheetManager) SyncToSheet(uuid string, data map[string]interface{}) err
 	}
 
 	_, err = s.Service.Spreadsheets.Values.Update(s.SpreadsheetID, writeRange, valRange).ValueInputOption("RAW").Do()
+
+	// REMOVED: The secondary "loopGuard" update.
+	// We now write the actual user to Column G in the block above.
+
+	if err == nil {
+		log.Printf("Synced row %d in Sheets for UUID %s (Updated By: %s)", rowNum, uuid, updatedBy)
+	}
+	return err
+}
+
+// --- NEW METHOD: DeleteRow ---
+func (s *SheetManager) DeleteRow(uuid string) error {
+	index, err := s.findRowIndex(uuid)
 	if err != nil {
 		return err
 	}
 
-	// Update the "Last Updated By" column (Col G) to prevent loops
-	// We do this separately or include it above. Let's force it here.
-	loopGuardRange := fmt.Sprintf("Sheet1!G%d", rowIndex)
-	loopGuardVal := &sheets.ValueRange{Values: [][]interface{}{{"sync_bot"}}}
-	s.Service.Spreadsheets.Values.Update(s.SpreadsheetID, loopGuardRange, loopGuardVal).ValueInputOption("RAW").Do()
+	if index == -1 {
+		log.Printf("UUID %s not found in sheets, skipping delete.", uuid)
+		return nil
+	}
 
-	log.Printf("Synced row %d in Sheets for UUID %s", rowIndex, uuid)
-	return nil
+	// Prepare delete request (DeleteDimension)
+	req := &sheets.Request{
+		DeleteDimension: &sheets.DeleteDimensionRequest{
+			Range: &sheets.DimensionRange{
+				SheetId:    0,
+				Dimension:  "ROWS",
+				StartIndex: int64(index),
+				EndIndex:   int64(index + 1),
+			},
+		},
+	}
+
+	batchReq := &sheets.BatchUpdateSpreadsheetRequest{
+		Requests: []*sheets.Request{req},
+	}
+
+	_, err = s.Service.Spreadsheets.BatchUpdate(s.SpreadsheetID, batchReq).Do()
+	if err == nil {
+		log.Printf("Deleted row %d for UUID %s", index+1, uuid)
+	}
+	return err
 }
 
 func (s *SheetManager) appendRow(uuid string, data map[string]interface{}) error {
-	// Construct the full row
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
+
+	// Safely get last_updated_by
+	updatedBy, ok := data["last_updated_by"].(string)
+	if !ok || updatedBy == "" {
+		updatedBy = "system"
+	}
 
 	values := []interface{}{
 		uuid,
-		timestamp,
 		data["product_name"],
 		data["quantity"],
 		data["price"],
 		data["discount"],
-		timestamp,  // timestamp (let sheets handle it or pass it)
-		"sync_bot", // Loop guard
+		timestamp,
+		updatedBy, // CHANGE: Use actual DB value
 	}
 
 	valRange := &sheets.ValueRange{
@@ -258,6 +304,14 @@ func (s *SheetManager) ClearAndOverwrite(products []map[string]interface{}) erro
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 
 	for _, p := range products {
+		// --- CHANGE START ---
+		// Determine the "Updated By" value
+		updatedBy := "initial_sync" // Default fallback
+		if val, ok := p["last_updated_by"].(string); ok && val != "" {
+			updatedBy = val
+		}
+		// --- CHANGE END ---
+
 		row := []interface{}{
 			p["uuid"],
 			p["product_name"],
@@ -265,7 +319,7 @@ func (s *SheetManager) ClearAndOverwrite(products []map[string]interface{}) erro
 			p["price"],
 			p["discount"],
 			timestamp,
-			"initial_sync", // Mark as initial load
+			updatedBy, // Use the determined value here
 		}
 		valueRange.Values = append(valueRange.Values, row)
 	}

@@ -62,7 +62,8 @@ func SaveSheetID(name, spreadsheetID string) error {
 }
 
 func GetAllProducts() ([]map[string]interface{}, error) {
-	rows, err := DB.Query("SELECT uuid, product_name, quantity, price, discount FROM product")
+	// added last_updated_by to query
+	rows, err := DB.Query("SELECT uuid, product_name, quantity, price, discount, last_updated_by FROM product")
 	if err != nil {
 		return nil, err
 	}
@@ -70,23 +71,56 @@ func GetAllProducts() ([]map[string]interface{}, error) {
 
 	var products []map[string]interface{}
 	for rows.Next() {
-		var uuid, name string
+		var uuid, name, lastUpdatedBy string
 		var qty int
-		var price, discount float64
+		var price float64
+		var discount bool // Changed to bool based on your schema (TINYINT(1))
 
-		if err := rows.Scan(&uuid, &name, &qty, &price, &discount); err != nil {
+		// Scan lastUpdatedBy as well
+		if err := rows.Scan(&uuid, &name, &qty, &price, &discount, &lastUpdatedBy); err != nil {
 			return nil, err
 		}
 
 		products = append(products, map[string]interface{}{
-			"uuid":         uuid,
-			"product_name": name,
-			"quantity":     qty,
-			"price":        price,
-			"discount":     discount,
+			"uuid":            uuid,
+			"product_name":    name,
+			"quantity":        qty,
+			"price":           price,
+			"discount":        discount,
+			"last_updated_by": lastUpdatedBy, // Added field
 		})
 	}
 	return products, nil
+}
+
+// NEW FUNCTION: Fetch single product with all fields
+func GetProductByUUID(uuid string) (map[string]interface{}, error) {
+	query := `
+        SELECT uuid, product_name, quantity, price, discount, last_updated_by 
+        FROM product WHERE uuid = ?
+    `
+
+	var name, lastUpdatedBy string
+	var qty int
+	var price float64
+	var discount bool
+
+	err := DB.QueryRow(query, uuid).Scan(&uuid, &name, &qty, &price, &discount, &lastUpdatedBy)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("product not found")
+		}
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"uuid":            uuid,
+		"product_name":    name,
+		"quantity":        qty,
+		"price":           price,
+		"discount":        discount,
+		"last_updated_by": lastUpdatedBy,
+	}, nil
 }
 
 // 2. Get the CURRENT Binlog position so we know where to start listening
@@ -141,4 +175,90 @@ func GetLatestToken() (*oauth2.Token, error) {
 		TokenType:    tokenType,
 		Expiry:       expiry,
 	}, nil
+}
+
+func UpdateProductField(uuid string, dbField string, value interface{}, userEmail string) error {
+	// 1. Safety Guard: Whitelist allowed columns to prevent SQL injection
+	// (even though the handler maps them, this is a second line of defense)
+	allowedFields := map[string]bool{
+		"product_name": true,
+		"quantity":     true,
+		"price":        true,
+		"discount":     true,
+	}
+
+	if !allowedFields[dbField] {
+		return fmt.Errorf("invalid database field: %s", dbField)
+	}
+
+	// 2. Construct Query
+	// Note: We inject dbField directly because we validated it against the whitelist above.
+	query := fmt.Sprintf("UPDATE product SET %s = ?, last_updated_by = ?, updated_at = ? WHERE uuid = ?", dbField)
+
+	// 3. Execute
+	_, err := DB.Exec(query, value, userEmail, time.Now(), uuid)
+	return err
+}
+
+func TxUpsertProductField(tx *sql.Tx, uuid string, dbField string, value interface{}, userEmail string) error {
+	allowedFields := map[string]bool{
+		"product_name": true,
+		"quantity":     true,
+		"price":        true,
+		"discount":     true,
+	}
+
+	if !allowedFields[dbField] {
+		return fmt.Errorf("invalid database field: %s", dbField)
+	}
+
+	var query string
+
+	// LOGIC:
+	// We construct a specific query for each scenario.
+	// If we are inserting a "Price", we MUST provide a dummy "Product Name" to satisfy the NOT NULL constraint.
+	// If we are inserting a "Name", we MUST provide a dummy "Price".
+	// If we are inserting "Quantity", we MUST provide BOTH.
+
+	switch dbField {
+	case "product_name":
+		// User provided Name, we inject dummy Price (0.00) for the INSERT case
+		query = `
+			INSERT INTO product (uuid, product_name, price, last_updated_by, updated_at) 
+			VALUES (?, ?, 0.00, ?, ?) 
+			ON DUPLICATE KEY UPDATE 
+				product_name = VALUES(product_name), 
+				last_updated_by = VALUES(last_updated_by), 
+				updated_at = VALUES(updated_at)
+		`
+
+	case "price":
+		// User provided Price, we inject dummy Name ('New Product') for the INSERT case
+		query = `
+			INSERT INTO product (uuid, price, product_name, last_updated_by, updated_at) 
+			VALUES (?, ?, 'New Product', ?, ?) 
+			ON DUPLICATE KEY UPDATE 
+				price = VALUES(price), 
+				last_updated_by = VALUES(last_updated_by), 
+				updated_at = VALUES(updated_at)
+		`
+
+	default:
+		// User provided Quantity or Discount. We inject BOTH dummy Name and Price.
+		// Note: We safely inject dbField here because it's whitelisted above.
+		query = fmt.Sprintf(`
+			INSERT INTO product (uuid, %s, product_name, price, last_updated_by, updated_at) 
+			VALUES (?, ?, 'New Product', 0.00, ?, ?) 
+			ON DUPLICATE KEY UPDATE 
+				%s = VALUES(%s), 
+				last_updated_by = VALUES(last_updated_by), 
+				updated_at = VALUES(updated_at)
+		`, dbField, dbField, dbField)
+	}
+
+	// Execute with the standard arguments (UUID, Value, Email, Time)
+	// The dummy values ('New Product', 0.00) are hardcoded in the SQL string above.
+	_, err := tx.Exec(query, uuid, value, userEmail, time.Now())
+
+	return err
 }

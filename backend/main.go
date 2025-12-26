@@ -111,19 +111,55 @@ func main() {
 				}
 
 				log.Printf("Processing Event: %s %s", event.Action, event.RowID)
-				err := sm.SyncToSheet(event.RowID, event.Data)
+
+				var err error
+
+				// CHECK ACTION TYPE
+				if event.Action == "delete" {
+					err = sm.DeleteRow(event.RowID)
+				} else {
+					// "insert" or "update"
+					err = sm.SyncToSheet(event.RowID, event.Data)
+				}
+
 				if err != nil {
-					log.Printf("Error syncing: %v", err)
+					log.Printf("Error syncing (%s): %v", event.Action, err)
 				}
 			}
 		}
 	}()
+
+	fs := http.FileServer(http.Dir("./static"))
+	http.Handle("/", fs)
 
 	http.HandleFunc("/auth/google/login", handlers.GoogleLoginHandler)
 	http.HandleFunc("/auth/google/callback", func(w http.ResponseWriter, r *http.Request) {
 		handlers.GoogleCallbackHandler(w, r, authReadySignal)
 	})
 	http.HandleFunc("/api/create-sheet", gsheets.CreateAndSeedSheetHandler)
+
+	http.HandleFunc("/api/products", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			handlers.GetProductsHandler(w, r)
+		} else if r.Method == http.MethodPost {
+			handlers.CreateProductHandler(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	http.HandleFunc("/api/products/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			handlers.UpdateProductHandler(w, r)
+		} else if r.Method == http.MethodDelete {
+			handlers.DeleteProductHandler(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	// Add this line with your other routes
+	http.HandleFunc("/api/webhook/sheets", handlers.SheetWebhookHandler)
 
 	port := ":8080"
 	log.Printf("Server starting on http://localhost%s", port)
